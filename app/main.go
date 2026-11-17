@@ -10,7 +10,7 @@ import (
 )
 
 // version is set at build time with -ldflags "-X main.version=<version>".
-var version = "dev"
+var version = "dev-0"
 
 func main() {
 	mux := http.NewServeMux()
