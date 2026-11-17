@@ -6,6 +6,6 @@ resources:
   - ../../base
 images:
   - name: bulletcomes/trdl
-    newTag: 'ec2e9c4'
+    newTag: '72f150d'
 patches:
   - path: deployment-patch.yaml

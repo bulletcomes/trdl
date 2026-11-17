@@ -73,6 +73,7 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 |---|---|
 | A GitHub repository with Actions, and Docker Hub secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | `.github/workflows/ci.yml` |
 | A Google Cloud project with billing, and a regional GKE cluster with Workload Identity | [Deploying to GKE](operations.md#deploying-to-gke) |
+| Enough regional quota (notably `SSD_TOTAL_GB`) for an extra node per zone during rollouts | Autopilot adds nodes on demand; a quota limit blocked one during a rollout |
 | A global static IP `trdl-ip`, and a domain pointing at it (the proof of concept uses sslip.io) | `ingress-patch.yaml`, `managedcertificate.yaml` |
 | The project ID, and KEDA with `roles/monitoring.viewer` (only if autoscaling is kept) | `scaledobject.yaml` |
 | The image tag to run | `newTag` in `overlays/gke/kustomization.yaml` |
@@ -87,3 +88,4 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 2. GKE is deployed by hand, and uses an sslip.io name instead of a real domain.
 3. Autoscaling hasn't been load-tested on GKE; thresholds and resource requests are starting values, not measurements.
 4. Not yet tested: request continuity during a rolling update, and a zone failure.
+5. Kubernetes doesn't rebalance running pods. If a zone has no schedulable node during a rollout, two pods can end up in one zone until one is deleted (seen once on GKE; see [operations.md](operations.md#rollouts-and-troubleshooting)).

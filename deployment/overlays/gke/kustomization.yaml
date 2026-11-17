@@ -14,7 +14,7 @@ resources:
 images:
   - name: bulletcomes/trdl
     newName: docker.io/bulletcomes/trdl
-    newTag: 'ec2e9c4'
+    newTag: '72f150d'
 patches:
   - path: deployment-patch.yaml
   - path: service-patch.yaml

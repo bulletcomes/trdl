@@ -50,4 +50,5 @@ kubectl -n trdl rollout undo deployment/trdl   # with Flux in production: git re
 ```
 
 - **`404 page not found` on `localhost:8080`:** that's Traefik, not the service. The `gke` overlay's host rule was applied to k3d; fix it with `kubectl apply -k deployment/overlays/local`.
+- **Two pods in one zone after a rollout:** a zone briefly had no schedulable node (on GKE: a node was being replaced and the new one hit a quota limit). Kubernetes won't move running pods, so once all three zones have nodes (`kubectl get nodes -L topology.kubernetes.io/zone`), delete one of the doubled-up pods; the PodDisruptionBudget allows it, and the replacement lands in the empty zone.
 - **ScaledObject `READY=False`:** `kubectl -n trdl describe scaledobject trdl` shows why (metric source down, wrong query, missing permission). With `FALLBACK=True` it runs a fixed replica count until the metric is readable again.
