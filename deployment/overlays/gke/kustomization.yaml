@@ -4,7 +4,7 @@ resources:
   - ../../base
 images:
   - name: bulletcomes/trdl
-    newTag: '1.0'
+    newTag: '1.1'
 patches:
   - path: deployment-patch.yaml
   - path: ingress-patch.yaml

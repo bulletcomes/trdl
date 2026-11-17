@@ -1,9 +1,5 @@
 # The Responding Dark Laughter (TRDL)
 
-A small, production-minded proof of concept for an HTTP service that returns `42`.
-
-This repository is designed to be runnable on a local Kubernetes cluster (k3d) while keeping the manifests and documentation understandable as a path toward a managed public-cloud Kubernetes platform such as Google Kubernetes Engine (GKE).
-
 ## What is included
 
 - A minimal Go HTTP service.
@@ -12,7 +8,7 @@ This repository is designed to be runnable on a local Kubernetes cluster (k3d) w
 - Kubernetes Deployment and Service manifests managed with Kustomize.
 - A base deployed directly to k3d, and a GKE-oriented overlay.
 - A Traefik Ingress (k3d's built-in controller); the GKE overlay adds a host rule.
-- GitHub Actions CI that tests, validates manifests, builds, scans, and publishes an image to GHCR.
+- GitHub Actions CI that tests, validates manifests, builds, scans, and publishes an docker.io.
 - Operational, architecture, security, and production-readiness notes.
 
 ## Service contract
@@ -27,32 +23,6 @@ This repository is designed to be runnable on a local Kubernetes cluster (k3d) w
 | Any non-GET method | `405`, with `Allow: GET` |
 
 The service is intentionally stateless and has no database or other runtime dependency.
-
-## Run locally without Kubernetes
-
-Requirements: Go 1.22+.
-
-```bash
-cd app
-go test ./...
-go run .
-```
-
-In another terminal:
-
-```bash
-curl -i http://localhost:8080/
-curl -i http://localhost:8080/version
-```
-
-## Build and run the container
-
-```bash
-docker build --build-arg VERSION=local -t trdl:local app
-docker run --rm -p 8080:8080 trdl:local
-curl -i http://localhost:8080/
-curl -i http://localhost:8080/version
-```
 
 ## Run on local Kubernetes (k3d)
 

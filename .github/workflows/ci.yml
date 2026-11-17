@@ -43,6 +43,10 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
+      - name: Compute short SHA
+        id: vars
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to Docker Hub
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
@@ -58,4 +62,4 @@ jobs:
           context: app
           build-args: VERSION=${{ github.sha }}
           push: true
-          tags: docker.io/bulletcomes/trdl:${{ github.sha }}
+          tags: docker.io/bulletcomes/trdl:${{ steps.vars.outputs.short_sha }}
