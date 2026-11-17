@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trdl
+  namespace: trdl
+spec:
+  template:
+    spec:
+      containers:
+        - name: trdl
+          imagePullPolicy: IfNotPresent
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: trdl
