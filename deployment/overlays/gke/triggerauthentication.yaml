@@ -1,0 +1,11 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: gcp-workload-identity
+  namespace: trdl
+spec:
+  # KEDA reads Cloud Monitoring as the keda-operator Kubernetes service account,
+  # through Workload Identity. Grant that identity roles/monitoring.viewer;
+  # see the README. No keys are stored in the cluster.
+  podIdentity:
+    provider: gcp

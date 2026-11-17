@@ -1,0 +1,16 @@
+# k3s's bundled Traefik already exports Prometheus metrics on :9100, but no
+# Service exposes that port. This one gives Prometheus a stable address.
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-metrics
+  namespace: kube-system
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: traefik
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+      protocol: TCP

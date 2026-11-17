@@ -55,6 +55,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           lifecycle:
+            # Built-in sleep action (Kubernetes 1.30+): the distroless image has no shell.
             preStop:
-              exec:
-                command: ["/bin/sh", "-c", "sleep 2"]
+              sleep:
+                seconds: 2

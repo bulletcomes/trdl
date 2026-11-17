@@ -1,10 +1,18 @@
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: trdl
-  namespace: trdl
-spec:
-  rules:
+# Swap the base Traefik Ingress for the GKE Ingress controller, which
+# provisions a global external Application Load Balancer.
+- op: remove
+  path: /spec/ingressClassName
+- op: add
+  path: /metadata/annotations
+  value:
+    kubernetes.io/ingress.class: gce
+    # Reserve first: gcloud compute addresses create trdl-ip --global
+    kubernetes.io/ingress.global-static-ip-name: trdl-ip
+    networking.gke.io/managed-certificates: trdl
+    kubernetes.io/ingress.allow-http: "false"
+- op: replace
+  path: /spec/rules
+  value:
     - host: trdl.example.com
       http:
         paths:

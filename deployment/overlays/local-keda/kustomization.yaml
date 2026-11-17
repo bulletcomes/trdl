@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The local k3d deployment plus request-rate autoscaling with KEDA.
+# Needs KEDA and deployment/addons/prometheus installed first (see README).
+resources:
+  - ../local
+  - scaledobject.yaml

@@ -1,130 +1,107 @@
-# Technical solution and proof-of-concept report
+# Solution
 
-## 1. Objective and scope
+## Scope
 
-The objective is to demonstrate a small HTTP service and a credible path to operating it as a highly available production service in a public cloud. The application itself is deliberately simple: `GET /` returns the text `42`.
+The service itself is trivial (`GET /` returns `42`). The work is in showing a credible path to running it as a highly available production service in a public cloud: container, Kubernetes manifests, CI, autoscaling and operations.
 
-The proof of concept focuses on delivery and runtime concerns rather than adding application complexity. It includes an executable service, tests, a container image, Kubernetes resources, local deployment instructions, and an automated CI pipeline.
+Everything runs on a local k3d cluster. The GKE setup is a reference overlay that CI renders but nothing deploys, because no cloud account is assumed. Tasks and time estimates are in [discovery.md](discovery.md).
 
-The implementation is intended to be completed and reviewed within the assignment's ten-hour constraint. Cloud infrastructure provisioning and a real cloud deployment are explicitly outside the local proof-of-concept boundary because cloud account access is not assumed.
+## Architecture
 
-## 2. Overall technical approach
+Target production flow on GKE:
 
-The target production architecture is:
+```mermaid
+flowchart TB
+    C[Client] --> DNS[Public DNS]
+    DNS --> LB[Global HTTPS load balancer<br/>managed certificate]
+    LB -- NEGs --> Z1 & Z2 & Z3
+    subgraph Z1[Zone a]
+        P1[trdl pod]
+    end
+    subgraph Z2[Zone b]
+        P2[trdl pod]
+    end
+    subgraph Z3[Zone c]
+        P3[trdl pod]
+    end
+    KEDA[KEDA] -. scales on LB request rate .-> Z1 & Z2 & Z3
+    REG[Docker Hub] -. image pull .-> Z1 & Z2 & Z3
+```
 
-1. A client resolves a public DNS name and connects over HTTPS.
-2. A cloud load balancer receives traffic and forwards it to the cluster ingress/gateway.
-3. A Kubernetes Service distributes requests to ready application pods.
-4. A Deployment maintains the desired number of stateless replicas and performs rolling updates.
-5. Container images are built and tested by CI, scanned, and published to a registry.
-6. A controlled deployment process updates the workload to a new immutable image version.
+Delivery flow (the approval and deploy steps are the intended next stage, not implemented):
 
-For the local demonstration, k3d provides a Kubernetes cluster running in Docker. This demonstrates container packaging, Kubernetes scheduling, service discovery, probes, and rolling-update mechanics. It does not reproduce cloud-zone or managed-control-plane availability.
+```mermaid
+flowchart LR
+    PR[Pull request] --> TEST[Unit tests] --> MAN[Render manifests] --> BUILD[Build image] --> SCAN[Trivy scan]
+    SCAN --> MERGE[Merge to main] --> PUSH[Publish short-SHA tag]
+    PUSH -.-> APPROVAL[Approval] -.-> DEPLOY[Deploy] -.-> SMOKE[Smoke test]
+```
 
-## 3. Technology choices
+## Technology choices
 
 | Area | Choice | Reason |
 |---|---|---|
-| Application | Go standard library | Small dependency footprint, fast startup, simple HTTP implementation |
-| Container | Multi-stage build, distroless runtime | Small runtime surface and no shell/package manager in the final image |
-| Orchestration | Kubernetes | Widely supported public-cloud workload platform |
-| Local cluster | k3d | Reproducible Kubernetes environment without cloud access |
-| Configuration | Kustomize | Native Kubernetes manifest customization without introducing another packaging layer |
-| CI | GitHub Actions | Integrated with source control and straightforward for a small project |
-| Image registry | GHCR | Can be used without assuming a cloud account |
-| Cloud target | Regional GKE | Managed Kubernetes option; regional control plane and multi-zone node placement can support resilience |
+| Application | Go standard library | No dependencies, fast startup |
+| Container | Multi-stage build, distroless, non-root | Small attack surface, no shell |
+| Configuration | Kustomize: one base, `local`, `local-keda` and `gke` overlays | Native to kubectl, no extra packaging layer |
+| Local cluster | k3d (1 server, 2 agents) | Reproducible Kubernetes without cloud access |
+| Autoscaling | KEDA on request rate | CPU says little for a constant-response service |
+| CI | GitHub Actions | Lives with the code |
+| Registry | Docker Hub | No cloud account needed |
+| Cloud target | Regional GKE | Regional control plane, nodes in three zones |
 
-The app is deliberately stateless. There is no database, cache, queue, or persistent volume because none is required by the service contract.
+## Availability
 
-## 4. Availability and resilience
+The base Deployment runs 2 replicas behind a Service that only routes to ready pods. Rolling updates use `maxUnavailable: 0`. The process handles SIGTERM, and a 2-second `preStop` sleep lets endpoints update before shutdown. Liveness (`/healthz`) and readiness (`/readyz`) are separate so that if dependencies are added later, readiness can reflect them without a remote outage triggering restarts.
 
-The Kubernetes Deployment starts with two replicas. A Service sends traffic only to ready endpoints. Readiness probes prevent a pod from receiving traffic before it is ready; liveness probes allow Kubernetes to restart an unhealthy process.
+The `gke` overlay adds what a multi-zone setup needs:
 
-A rolling update uses `maxUnavailable: 0` and `maxSurge: 1`, subject to available cluster capacity. The process handles SIGTERM and allows a short graceful-shutdown window. The container runs as a non-root user.
+| Concern | Implementation |
+|---|---|
+| Zone spread | 3 replicas with a hard topology spread on `topology.kubernetes.io/zone` (`maxSkew: 1`): a zone outage removes at most a third of the pods. Soft spread across nodes within a zone. |
+| Disruptions | PodDisruptionBudget: at most one pod down during node upgrades and drains. |
+| Load balancing | GKE Ingress (`gce`) with a global external Application Load Balancer; container-native load balancing (NEGs) sends traffic straight to pods in every zone. |
+| Health checks | BackendConfig: load balancer health check on `/readyz`, 10 s connection draining. |
+| TLS | Google-managed certificate; plain HTTP disabled. |
 
-For production, I would use a regional managed cluster and distribute replicas across independent zones. The included GKE overlay adds a zone topology-spread preference, but this is not a substitute for provisioning multiple zones, checking node capacity, and validating scheduling behaviour. A PodDisruptionBudget should be added once replica count and maintenance policy are finalized.
+Replicas alone don't establish an SLA. Availability also depends on DNS, the load balancer, the control plane, node pools, the registry and the operational response, and an SLA needs an agreed measurement window and error budget. See the downtime table in [operations.md](operations.md#slo-discussion).
 
-Two replicas do not by themselves establish an availability SLA. Availability also depends on the load balancer, DNS, network, cluster control plane, node pools, image registry, deployment process, and operational response. An SLA needs a defined measurement window and error budget.
+## Autoscaling
 
-## 5. Developer experience and delivery
+KEDA scales the Deployment on requests per second, creating and owning the HPA:
 
-A developer should be able to clone the repository, run the tests, build the image, and deploy locally using the README. The application has no external runtime dependencies.
+- **Locally** (`local-keda`), it reads Traefik's request rate from a small Prometheus: one replica per 100 req/s, 2 to 6 replicas. A k6 load test at 400 req/s scaled it from 2 to 4 and back with 0 failed requests out of 44,150 ([run details](operations.md#autoscaling-demo-with-keda-k3d)).
+- **On GKE**, it reads the load balancer's request count from Cloud Monitoring (through Workload Identity, no keys), with CPU as a second trigger, between 3 and 9 replicas, so there is always one pod per zone.
 
-The GitHub Actions workflow runs on pull requests and pushes to `main`. It tests the Go code, renders the Kustomize overlays, builds the image, and scans it for high/critical vulnerabilities. A push to `main` publishes an immutable commit-SHA image tag to GHCR.
+Without a fallback, KEDA freezes at the current replica count when its metric source is down, which was observed locally with Prometheus stopped. Both ScaledObjects therefore set `fallback`: after 3 failed reads, KEDA runs a fixed safe count (4 locally, 6 on GKE). This was tested locally. Scale-to-zero is not used, because it would remove the warm replicas that the availability goal depends on.
 
-The workflow does not deploy to a cluster. A hosted CI runner cannot reach a laptop's local k3d cluster. For a real GKE deployment, I would add a separate protected deployment job using Workload Identity Federation, with environment approvals and a smoke test after rollout. I would avoid long-lived service-account keys.
+The cost is two more components to run and upgrade (the KEDA operator and its metrics API server), and the scaling now depends on the metrics pipeline.
 
-## 6. Testing strategy
+## Delivery
 
-Automated unit tests cover:
-- The successful root response and content type.
-- Unknown paths (`404`).
-- Unsupported methods (`405` and `Allow: GET`).
-- Health and readiness endpoints.
+CI tests, renders every overlay, builds, scans, and on `main` publishes an immutable short-SHA tag, which `/version` also reports. It does not deploy: a hosted runner can't reach a laptop cluster, and no cloud credentials are assumed. A real GKE pipeline would add a protected deploy job using Workload Identity Federation (no long-lived keys), an environment approval and a post-rollout smoke test.
 
-The next integration checks in a real cluster should verify:
-- All replicas become ready.
-- The Service has ready endpoints.
-- Requests continue during a rolling update.
-- Deleting a pod causes the Deployment to replace it.
-- A process that fails a liveness probe is restarted.
-- A pod is removed from Service endpoints before termination.
-- The externally exposed endpoint returns `42`.
+## Testing
 
-A minimal smoke test after deployment should issue `GET /` and compare the response body with `42`.
+- **Unit tests:** `/` body and content type, `404`, `405` with `Allow`, health, readiness and version endpoints.
+- **Demonstrated on k3d:** scaling up and down under load with no failed requests, and the KEDA fallback when Prometheus is down.
+- **Still to do:** request continuity during a rolling update (the k6 Job can drive it), pod deletion and replacement, and a smoke test against the external endpoint.
 
-## 7. Monitoring and operations
+## Monitoring
 
-For production I would define a small set of service-level indicators:
-- Request success ratio (successful requests divided by valid requests).
-- Request rate.
-- HTTP 5xx rate.
-- Request latency (at least p50, p95, and p99).
-- Pod readiness and restart count.
-- CPU and memory utilization.
+Indicators to track: success ratio, request rate, 5xx rate, latency (p50, p95, p99), pod readiness and restarts. Alerts should fire on user-visible symptoms (5xx rate, latency, unavailable replicas), not on CPU. On GKE, logs go to Cloud Logging from stdout; OpenTelemetry is the natural choice if tracing is needed.
 
-The service should emit structured request logs to stdout/stderr. In GKE these can be collected by the cloud logging agent. Metrics and traces should be integrated with the chosen platform; OpenTelemetry is a reasonable instrumentation standard if tracing becomes useful.
+## Security
 
-Alerts should focus on user-visible symptoms (elevated 5xx rate, latency, or unavailable replicas), not merely CPU usage. A tiny constant-response service is unlikely to benefit from CPU-based autoscaling. If traffic-driven scaling becomes a requirement, evaluate request-rate or concurrency metrics. KEDA could be introduced for event/metric-driven scaling, but it is not necessary for this proof of concept and would add components to operate.
+In place: a non-root distroless image, `seccomp: RuntimeDefault`, resource limits, no secrets in the app, Trivy scanning in CI, and immutable image tags.
 
-## 8. Security
+Before production: image signing and provenance, dependency update automation, network policies, least-privilege IAM, an admission policy, and a documented patch process.
 
-The initial controls are:
-- Non-root runtime user.
-- Distroless runtime image.
-- No application secrets or credentials.
-- Kubernetes pod security context and seccomp RuntimeDefault.
-- Resource requests and limits.
-- Automated image vulnerability scanning.
-- Immutable image tags based on commit SHA.
+## Limitations and next steps
 
-Before production I would also configure image provenance/signing, dependency update automation, network policies, least-privilege IAM, secret management, admission policy, and a documented patch process.
+1. k3d has one control-plane server and no real zones. It demonstrates scheduling and recovery, not regional high availability.
+2. The GKE overlay has never been applied. Its hostname, static IP and project ID are placeholders, and the Cloud Monitoring filter is unverified.
+3. The 100 req/s per replica threshold is a demo value, not measured. Resource requests and limits are also starting values.
+4. CI renders the manifests but doesn't validate them against KEDA or GKE schemas.
 
-## 9. Discovery phase and indicative estimate
-
-The following is an estimate for a small engineering team, assuming access to a cloud account and an existing GitHub repository. It is not a claim that the cloud work has been performed.
-
-| Activity | Estimate |
-|---|---:|
-| Clarify availability, traffic, latency, security, and operational requirements | 0.75 h |
-| Confirm cloud landing-zone, networking, IAM, and registry assumptions | 0.75 h |
-| Application contract and implementation | 1.0 h |
-| Containerization and local Kubernetes deployment | 1.5 h |
-| CI pipeline, validation, and image publishing | 1.5 h |
-| Operational design, monitoring, and security review | 1.0 h |
-| Failure/rollout tests and documentation | 1.5 h |
-| Review, handover, and contingency | 1.0 h |
-| **Total** | **9.0 h** |
-
-This is a proof-of-concept estimate, not a production delivery estimate. A production implementation would require separate estimates for cloud networking, cluster provisioning, DNS/TLS, IAM, monitoring, security controls, load testing, disaster recovery, and operational readiness.
-
-## 10. Known limitations and next steps
-
-1. The local k3d cluster has one control-plane server; it is not a highly available control plane.
-2. Local Docker networking and a local ingress do not validate a public cloud load balancer or DNS/TLS.
-3. The GKE overlay contains a placeholder image repository and example hostname.
-4. The CI workflow publishes to GHCR but does not perform a cloud deployment.
-5. Resource requests and limits are starting values and must be validated with measurements.
-6. The service is so lightweight that autoscaling is not meaningful without a realistic traffic profile.
-
-Recommended next steps are to provision a regional GKE environment, configure secure CI identity, deploy the GKE overlay with a real registry image, expose it through HTTPS, run failure and load tests, and agree measurable SLOs before making availability commitments.
+Next steps: provision a regional GKE cluster, set up CI identity, deploy the `gke` overlay, run failure and load tests there, and agree SLOs before committing to an availability target.

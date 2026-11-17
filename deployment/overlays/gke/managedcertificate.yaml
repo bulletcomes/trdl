@@ -1,0 +1,9 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: trdl
+  namespace: trdl
+spec:
+  # Must match the Ingress host, with DNS pointing at the static IP.
+  domains:
+    - trdl.example.com

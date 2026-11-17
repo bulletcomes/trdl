@@ -1,0 +1,31 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: trdl
+  namespace: trdl
+spec:
+  scaleTargetRef:
+    name: trdl
+  # KEDA creates and owns an HPA for the Deployment; there must be no other HPA.
+  minReplicaCount: 2
+  maxReplicaCount: 6
+  # If Prometheus can't be read 3 times in a row, run 4 replicas (enough for the
+  # demo's peak load) instead of freezing at the current count.
+  fallback:
+    failureThreshold: 3
+    replicas: 4
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        # Shortened from the 300 s default so the demo scales back down quickly.
+        scaleDown:
+          stabilizationWindowSeconds: 30
+  triggers:
+    # Requests per second reaching the trdl Service through Traefik.
+    # With the default AverageValue metric type, the threshold is per replica:
+    # 400 req/s with a threshold of 100 asks for 4 replicas.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(rate(traefik_service_requests_total{service="trdl-trdl-80@kubernetes"}[30s]))
+        threshold: "100"

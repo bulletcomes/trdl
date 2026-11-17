@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# One-off k6 load test against the Traefik Ingress, for the KEDA demo.
+# Delete and re-apply to run it again: Jobs cannot be re-run in place.
+namespace: trdl
+resources:
+  - job.yaml
+configMapGenerator:
+  - name: trdl-loadtest
+    files:
+      - script.js
+generatorOptions:
+  disableNameSuffixHash: true

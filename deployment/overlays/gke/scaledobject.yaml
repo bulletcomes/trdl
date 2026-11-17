@@ -1,0 +1,42 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: trdl
+  namespace: trdl
+spec:
+  scaleTargetRef:
+    name: trdl
+  # Never fewer than one pod per zone, so the zone spread and PDB stay meaningful.
+  # No scale-to-zero: that would trade away availability.
+  minReplicaCount: 3
+  maxReplicaCount: 9
+  # If Cloud Monitoring can't be read 3 times in a row, run 6 replicas (two per
+  # zone) instead of freezing at the current count.
+  fallback:
+    failureThreshold: 3
+    replicas: 6
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+  triggers:
+    # Primary signal: requests per second at the external load balancer, per replica.
+    - type: gcp-stackdriver
+      authenticationRef:
+        name: gcp-workload-identity
+      metadata:
+        projectId: my-gcp-project # replace
+        filter: >-
+          metric.type="loadbalancing.googleapis.com/https/request_count"
+          AND resource.labels.backend_target_name=monitoring.regex.full_match("k8s1-.*-trdl-trdl-80-.*")
+        alignmentPeriodSeconds: "60"
+        alignmentAligner: ALIGN_RATE
+        alignmentReducer: REDUCE_SUM
+        targetValue: "100"
+        valueIfNull: "0"
+    # Fallback: still scale on CPU if Cloud Monitoring is slow or unreachable.
+    - type: cpu
+      metricType: Utilization
+      metadata:
+        value: "70"

@@ -1,93 +1,67 @@
 # The Responding Dark Laughter (TRDL)
 
-## What is included
+A minimal Go HTTP service that answers `42`, with the container, Kubernetes manifests, CI and autoscaling needed to run it as a highly available service.
 
-- A minimal Go HTTP service.
-- Unit tests for the HTTP contract and error cases.
-- A non-root, multi-stage container image.
-- Kubernetes Deployment and Service manifests managed with Kustomize.
-- A base deployed directly to k3d, and a GKE-oriented overlay.
-- A Traefik Ingress (k3d's built-in controller); the GKE overlay adds a host rule.
-- GitHub Actions CI that tests, validates manifests, builds, scans, and publishes an docker.io.
-- Operational, architecture, security, and production-readiness notes.
+| Document | Contents |
+|---|---|
+| [docs/discovery.md](docs/discovery.md) | Requirements, assumptions, tasks and time estimate |
+| [docs/solution.md](docs/solution.md) | Architecture, design choices, availability, autoscaling, security, limitations |
+| [docs/operations.md](docs/operations.md) | Runbook: KEDA demo, GKE deployment, troubleshooting, rollouts |
 
 ## Service contract
 
-| Request | Expected result |
+| Request | Result |
 |---|---|
-| `GET /` | `200`, body `42`, content type `text/plain; charset=utf-8` |
-| `GET /healthz` | `200`, body `ok` |
-| `GET /readyz` | `200`, body `ready` |
-| `GET /version` | `200`, body is the build version (`dev` unless set at build time) |
+| `GET /` | `200`, body `42`, `text/plain; charset=utf-8` |
+| `GET /healthz` | `200`, body `ok` (liveness) |
+| `GET /readyz` | `200`, body `ready` (readiness) |
+| `GET /version` | `200`, the short commit SHA for CI-built images, `dev-0` otherwise |
 | Any other path | `404` |
 | Any non-GET method | `405`, with `Allow: GET` |
 
-The service is intentionally stateless and has no database or other runtime dependency.
+## Repository layout
 
-## Run on local Kubernetes (k3d)
-
-Requirements: Docker, kubectl, k3d, and Kustomize (or a kubectl version with `kubectl apply -k`).
-
-Create a local cluster:
-
-```bash
-k3d cluster create trdl \
-  --servers 1 \
-  --agents 2 \
-  --port "8080:80@loadbalancer"
+```
+app/                             Go service, tests, Dockerfile
+deployment/base/                 Namespace, Deployment, Service, Traefik Ingress
+deployment/overlays/local/       k3d: pinned image tag, spread across nodes
+deployment/overlays/local-keda/  local + KEDA request-rate autoscaling
+deployment/overlays/gke/         Reference: regional GKE over three zones (not deployed)
+deployment/addons/prometheus/    Minimal Prometheus for the KEDA demo
+deployment/loadtest/             k6 load test Job
 ```
 
-Deploy the application:
+## Quickstart (k3d)
+
+Requires Docker, kubectl and k3d.
 
 ```bash
-kubectl apply -k deployment/base
+k3d cluster create trdl --servers 1 --agents 2 --port "8080:80@loadbalancer"
+kubectl apply -k deployment/overlays/local
 kubectl -n trdl rollout status deployment/trdl
-kubectl -n trdl get pods -o wide
-```
 
-The base includes an Ingress for k3d's built-in Traefik controller, which the cluster's `8080:80@loadbalancer` port mapping exposes on the host. Access it at:
-
-```bash
 curl -i http://localhost:8080/
 curl -i http://localhost:8080/version
 ```
 
-Clean up:
+Use the `local` overlay, not `base` (which pins an old image tag) or `gke` (GKE-only resources, and a host rule that breaks `localhost`). For the autoscaling demo, see [operations.md](docs/operations.md#autoscaling-demo-with-keda-k3d).
+
+Clean up with `k3d cluster delete trdl`.
+
+## Development
+
+Requires Go 1.27.
 
 ```bash
-kubectl delete namespace trdl
-k3d cluster delete trdl
+cd app && go test -race ./...               # unit tests
+docker build -t trdl:local app              # container image
+kubectl kustomize deployment/overlays/local # render manifests
 ```
+
+Keep the service stateless, log to stdout, and add tests for new routes and error cases.
 
 ## CI/CD
 
-The GitHub Actions workflow runs on pull requests and pushes to `main`:
+GitHub Actions runs on pull requests and pushes to `main`: unit tests, a Kustomize render of every overlay, the image build, and a Trivy scan that fails on fixable HIGH/CRITICAL vulnerabilities. On `main` it publishes `docker.io/bulletcomes/trdl:<short-sha>`.
 
-1. Run Go unit tests.
-2. Validate Kubernetes manifests with Kustomize.
-3. Build the container.
-4. Run a Trivy vulnerability scan.
-5. On pushes to `main`, publish an immutable image tag (the commit SHA) to GitHub Container Registry (GHCR).
-
-The workflow does **not** deploy to a cluster. A GitHub-hosted runner cannot directly reach a developer's laptop cluster, and this assignment environment does not assume cloud credentials. The GKE deployment path is documented separately rather than pretending a deployment has been performed.
-
-To publish successfully, enable GitHub Actions package write permissions for the repository. The workflow uses the repository's built-in `GITHUB_TOKEN`.
-
-## GKE direction
-
-The `gke` overlay is a starting point, not a complete cloud provisioning solution. A production implementation would additionally provision/configure:
-
-- A regional GKE cluster with nodes in multiple zones.
-- Workload Identity Federation for CI/CD authentication.
-- Artifact Registry (or GHCR) image access.
-- A managed external HTTPS load balancer, DNS, and TLS certificate.
-- Network policies, cloud logging/monitoring integration, and appropriate IAM.
-- Topology spread constraints and disruption controls, validated against actual node labels and capacity.
-
-The included Ingress targets Traefik, which k3d ships by default. On GKE, choose and configure the intended ingress controller/load-balancer implementation; do not assume this manifest alone provisions a production Google Cloud Load Balancer.
-
-## Design choices and limitations
-
-See [`docs/solution.md`](docs/solution.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/operations.md`](docs/operations.md).
-
-Important distinction: two replicas on a local three-node k3d cluster demonstrate Kubernetes scheduling and recovery behaviour, but do not prove regional high availability. The local cluster has a single control-plane server and does not model independent cloud zones, managed control-plane availability, external DNS, or provider failure domains.
+Publishing needs two repository secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a Docker Hub access token with Read & Write scope). The workflow does not deploy; see [solution.md](docs/solution.md#delivery).
