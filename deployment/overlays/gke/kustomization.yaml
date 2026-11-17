@@ -1,9 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Reference overlay for a regional GKE cluster with nodes in three zones.
+# Regional GKE (Autopilot) cluster with nodes in three zones.
 # Requires KEDA, with Workload Identity for the KEDA operator.
-# Not deployed by CI. Replace the host name, static IP name and image tag
-# before applying.
+# Deployed by hand, not by CI; see docs/operations.md#deploying-to-gke.
+# Set the host name, static IP name, project ID and image tag for your project.
 resources:
   - ../../base
   - pdb.yaml
@@ -14,7 +14,7 @@ resources:
 images:
   - name: bulletcomes/trdl
     newName: docker.io/bulletcomes/trdl
-    newTag: '5151666'
+    newTag: 'ec2e9c4'
 patches:
   - path: deployment-patch.yaml
   - path: service-patch.yaml

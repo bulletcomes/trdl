@@ -1,86 +1,96 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestRootReturns42(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	rec := httptest.NewRecorder()
-	rootHandler(rec, req)
+// TestContract exercises the full HTTP contract through the real router and a
+// real HTTP server, so method handling, HEAD and 404/405 behave as in production.
+func TestContract(t *testing.T) {
+	orig := version
+	version = "abc1234"
+	defer func() { version = orig }()
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if got := rec.Body.String(); got != "42" {
-		t.Fatalf("body = %q, want %q", got, "42")
-	}
-	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
-		t.Fatalf("content type = %q", got)
-	}
-}
+	srv := httptest.NewServer(newRouter())
+	defer srv.Close()
 
-func TestUnknownPathReturns404(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
-	rec := httptest.NewRecorder()
-	rootHandler(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-}
-
-func TestUnsupportedMethodReturns405(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	rec := httptest.NewRecorder()
-	rootHandler(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-	}
-	if got := rec.Header().Get("Allow"); got != http.MethodGet {
-		t.Fatalf("Allow = %q, want GET", got)
-	}
-}
-
-func TestHealthAndReadiness(t *testing.T) {
 	tests := []struct {
-		name string
-		path string
-		fn   http.HandlerFunc
-		body string
+		name   string
+		method string
+		path   string
+		status int
+		body   string // checked when not empty
+		allow  string // checked when not empty
 	}{
-		{"health", "/healthz", healthHandler, "ok"},
-		{"readiness", "/readyz", readyHandler, "ready"},
+		{"root returns 42", http.MethodGet, "/", 200, "42", ""},
+		{"query string is ignored", http.MethodGet, "/?x=1", 200, "42", ""},
+		{"liveness", http.MethodGet, "/healthz", 200, "ok", ""},
+		{"readiness", http.MethodGet, "/readyz", 200, "ready", ""},
+		{"version", http.MethodGet, "/version", 200, "abc1234", ""},
+
+		{"unknown path", http.MethodGet, "/missing", 404, "", ""},
+		{"root does not match subpaths", http.MethodGet, "/42", 404, "", ""},
+		{"trailing slash is a different path", http.MethodGet, "/healthz/", 404, "", ""},
+		{"unknown path with other method", http.MethodPost, "/missing", 404, "", ""},
+
+		{"POST root", http.MethodPost, "/", 405, "", "GET, HEAD"},
+		{"PUT root", http.MethodPut, "/", 405, "", "GET, HEAD"},
+		{"DELETE version", http.MethodDelete, "/version", 405, "", "GET, HEAD"},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
-			rec := httptest.NewRecorder()
-			tt.fn(rec, req)
-			if rec.Code != http.StatusOK || rec.Body.String() != tt.body {
-				t.Fatalf("got status=%d body=%q", rec.Code, rec.Body.String())
+			req, err := http.NewRequest(tt.method, srv.URL+tt.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+
+			if resp.StatusCode != tt.status {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.status)
+			}
+			if tt.body != "" {
+				if string(body) != tt.body {
+					t.Errorf("body = %q, want %q", body, tt.body)
+				}
+				if ct := resp.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+					t.Errorf("Content-Type = %q", ct)
+				}
+			}
+			if tt.allow != "" {
+				if got := resp.Header.Get("Allow"); got != tt.allow {
+					t.Errorf("Allow = %q, want %q", got, tt.allow)
+				}
 			}
 		})
 	}
 }
 
-func TestVersion(t *testing.T) {
-	orig := version
-	version = "1.2.3"
-	defer func() { version = orig }()
+// HEAD must succeed wherever GET does, with the same headers and no body.
+func TestHeadHasNoBody(t *testing.T) {
+	srv := httptest.NewServer(newRouter())
+	defer srv.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/version", nil)
-	rec := httptest.NewRecorder()
-	versionHandler(rec, req)
-	if rec.Code != http.StatusOK || rec.Body.String() != "1.2.3" {
-		t.Fatalf("got status=%d body=%q", rec.Code, rec.Body.String())
-	}
-
-	req = httptest.NewRequest(http.MethodPost, "/version", nil)
-	rec = httptest.NewRecorder()
-	versionHandler(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	for _, path := range []string{"/", "/healthz", "/readyz", "/version"} {
+		resp, err := http.Head(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || len(body) != 0 {
+			t.Errorf("HEAD %s: status = %d, body = %q; want 200 and no body", path, resp.StatusCode, body)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+			t.Errorf("HEAD %s: Content-Type = %q", path, ct)
+		}
 	}
 }

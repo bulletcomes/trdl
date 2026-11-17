@@ -1,19 +1,12 @@
 # Solution
 
-## Scope
-
-The service itself is trivial (`GET /` returns `42`). The work is in showing a credible path to running it as a highly available production service in a public cloud: container, Kubernetes manifests, CI, autoscaling and operations.
-
-Everything runs on a local k3d cluster. The GKE setup is a reference overlay that CI renders but nothing deploys, because no cloud account is assumed. Tasks and time estimates are in [discovery.md](discovery.md).
+`GET /` returns `42`. The service is trivial on purpose; the work is in running it as a highly available service on public cloud. It runs on GKE Autopilot in `europe-north1`, across three zones, at `https://136-82-211-146.sslip.io/`, and on k3d for local development. Tasks and estimates are in [discovery.md](discovery.md).
 
 ## Architecture
 
-Target production flow on GKE:
-
 ```mermaid
 flowchart TB
-    C[Client] --> DNS[Public DNS]
-    DNS --> LB[Global HTTPS load balancer<br/>managed certificate]
+    C[Client] --> LB[Global HTTPS load balancer<br/>managed certificate]
     LB -- NEGs --> Z1 & Z2 & Z3
     subgraph Z1[Zone a]
         P1[trdl pod]
@@ -24,84 +17,73 @@ flowchart TB
     subgraph Z3[Zone c]
         P3[trdl pod]
     end
-    KEDA[KEDA] -. scales on LB request rate .-> Z1 & Z2 & Z3
-    REG[Docker Hub] -. image pull .-> Z1 & Z2 & Z3
+    KEDA[KEDA] -. scales on request rate .-> Z1 & Z2 & Z3
 ```
 
-Delivery flow (the approval and deploy steps are the intended next stage, not implemented):
+## Design choices
 
-```mermaid
-flowchart LR
-    PR[Pull request] --> TEST[Unit tests] --> MAN[Render manifests] --> BUILD[Build image] --> SCAN[Trivy scan]
-    SCAN --> MERGE[Merge to main] --> PUSH[Publish short-SHA tag]
-    PUSH -.-> APPROVAL[Approval] -.-> DEPLOY[Deploy] -.-> SMOKE[Smoke test]
-```
-
-## Technology choices
+Guiding rule: the simplest setup that is still credibly highly available.
 
 | Area | Choice | Reason |
 |---|---|---|
-| Application | Go standard library | No dependencies, fast startup |
-| Container | Multi-stage build, distroless, non-root | Small attack surface, no shell |
-| Configuration | Kustomize: one base, `local`, `local-keda` and `gke` overlays | Native to kubectl, no extra packaging layer |
-| Local cluster | k3d (1 server, 2 agents) | Reproducible Kubernetes without cloud access |
-| Autoscaling | KEDA on request rate | CPU says little for a constant-response service |
-| CI | GitHub Actions | Lives with the code |
-| Registry | Docker Hub | No cloud account needed |
-| Cloud target | Regional GKE | Regional control plane, nodes in three zones |
+| Application | Go standard library | No dependencies; the router handles methods, 404 and 405 |
+| Container | Multi-stage, distroless, non-root | Small attack surface, no shell |
+| Orchestrator | Kubernetes, configured with Kustomize | Portable between k3d and GKE; one base, one overlay per environment |
+| Cloud | Regional GKE Autopilot | Nodes in three zones without managing node pools |
+| Zone spread | 3 replicas, hard spread across zones (`maxSkew: 1`) | Losing a zone loses at most a third of capacity |
+| Disruptions | PodDisruptionBudget, `maxUnavailable: 0` rollouts | Upgrades and deploys never take more than one pod away |
+| Traffic | GKE Ingress, container-native load balancing, health check on `/readyz` | Load balancer sends traffic straight to ready pods in every zone |
+| TLS | Google-managed certificate, HTTP disabled | No certificates to handle |
+| CI | GitHub Actions | Tests, smoke test, Trivy scan, publish; lives with the code |
+| Registry | Docker Hub | Works from k3d and GKE without setup |
 
-## Availability
+**Autoscaling is an optional extra.** A service that returns `42` doesn't need it; I had time left and wanted to try an approach from a previous job. KEDA scales on requests per second (2–6 replicas locally, 3–9 on GKE, never below one pod per zone), with a fixed fallback if its metrics are unavailable. It is isolated: the `local` overlay runs without it, and on GKE it is two files that can be dropped. On k3d, a load test at 400 req/s scaled from 2 to 4 replicas and back, with 0 of 44,150 requests failing.
 
-The base Deployment runs 2 replicas behind a Service that only routes to ready pods. Rolling updates use `maxUnavailable: 0`. The process handles SIGTERM, and a 2-second `preStop` sleep lets endpoints update before shutdown. Liveness (`/healthz`) and readiness (`/readyz`) are separate so that if dependencies are added later, readiness can reflect them without a remote outage triggering restarts.
+Replicas alone don't make an SLA: that also needs an agreed target, monitoring and someone on call (see [What TRDL needs to provide](#what-trdl-needs-to-provide)).
 
-The `gke` overlay adds what a multi-zone setup needs:
+## Errors and edge cases
 
-| Concern | Implementation |
-|---|---|
-| Zone spread | 3 replicas with a hard topology spread on `topology.kubernetes.io/zone` (`maxSkew: 1`): a zone outage removes at most a third of the pods. Soft spread across nodes within a zone. |
-| Disruptions | PodDisruptionBudget: at most one pod down during node upgrades and drains. |
-| Load balancing | GKE Ingress (`gce`) with a global external Application Load Balancer; container-native load balancing (NEGs) sends traffic straight to pods in every zone. |
-| Health checks | BackendConfig: load balancer health check on `/readyz`, 10 s connection draining. |
-| TLS | Google-managed certificate; plain HTTP disabled. |
-
-Replicas alone don't establish an SLA. Availability also depends on DNS, the load balancer, the control plane, node pools, the registry and the operational response, and an SLA needs an agreed measurement window and error budget. See the downtime table in [operations.md](operations.md#slo-discussion).
-
-## Autoscaling
-
-KEDA scales the Deployment on requests per second, creating and owning the HPA:
-
-- **Locally** (`local-keda`), it reads Traefik's request rate from a small Prometheus: one replica per 100 req/s, 2 to 6 replicas. A k6 load test at 400 req/s scaled it from 2 to 4 and back with 0 failed requests out of 44,150 ([run details](operations.md#autoscaling-demo-with-keda-k3d)).
-- **On GKE**, it reads the load balancer's request count from Cloud Monitoring (through Workload Identity, no keys), with CPU as a second trigger, between 3 and 9 replicas, so there is always one pod per zone.
-
-Without a fallback, KEDA freezes at the current replica count when its metric source is down, which was observed locally with Prometheus stopped. Both ScaledObjects therefore set `fallback`: after 3 failed reads, KEDA runs a fixed safe count (4 locally, 6 on GKE). This was tested locally. Scale-to-zero is not used, because it would remove the warm replicas that the availability goal depends on.
-
-The cost is two more components to run and upgrade (the KEDA operator and its metrics API server), and the scaling now depends on the metrics pipeline.
-
-## Delivery
-
-CI tests, renders every overlay, builds, scans, and on `main` publishes an immutable short-SHA tag, which `/version` also reports. It does not deploy: a hosted runner can't reach a laptop cluster, and no cloud credentials are assumed. A real GKE pipeline would add a protected deploy job using Workload Identity Federation (no long-lived keys), an environment approval and a post-rollout smoke test.
+| Case | Behaviour | Why |
+|---|---|---|
+| Unknown path, including `/42` and `/healthz/` | `404` | `/` matches only the root, so a typo isn't answered with `42` |
+| Wrong method on a known path | `405` with `Allow: GET, HEAD` | Tells the client what is allowed |
+| `HEAD` | As `GET`, no body | Expected by HTTP; used by uptime checks |
+| Query string (`/?x=1`) | Ignored, `200` | No parameters to validate |
+| Slow client headers | Closed after 5 s | `ReadHeaderTimeout` (slowloris protection) |
+| Pod shutdown | `preStop` waits 2 s, then in-flight requests finish within 10 s | Traffic stops before the pod closes; fits the 15 s grace period |
+| Not ready, or hung | Readiness removes it from traffic; liveness restarts it | Separate probes, so a future dependency outage won't cause restart loops |
 
 ## Testing
 
-- **Unit tests:** `/` body and content type, `404`, `405` with `Allow`, health, readiness and version endpoints.
-- **Demonstrated on k3d:** scaling up and down under load with no failed requests, and the KEDA fallback when Prometheus is down.
-- **Still to do:** request continuity during a rolling update (the k6 Job can drive it), pod deletion and replacement, and a smoke test against the external endpoint.
+- **Unit tests**, run in CI: every row of the HTTP contract and the cases above, through the real router and an HTTP server ([app/main_test.go](../app/main_test.go)).
+- **End-to-end smoke test**, run in CI against the built container, and by hand against k3d or GKE after a deploy ([scripts/smoke-test.sh](../scripts/smoke-test.sh)).
+- **Checked by hand:** pod deletion on k3d (75 of 75 requests succeeded), autoscaling under load on k3d, and HTTPS, zones and certificate on GKE.
 
-## Monitoring
+## Delivery
 
-Indicators to track: success ratio, request rate, 5xx rate, latency (p50, p95, p99), pod readiness and restarts. Alerts should fire on user-visible symptoms (5xx rate, latency, unavailable replicas), not on CPU. On GKE, logs go to Cloud Logging from stdout; OpenTelemetry is the natural choice if tracing is needed.
+CI publishes an immutable short-SHA image on `main`; `/version` reports it. In the proof of concept, GKE is deployed by hand with `kubectl apply -k deployment/overlays/gke`. In production, **Flux** would deploy from this repository: a reviewed pull request that changes the image tag is the approval, CI never holds cluster credentials, and rollback is a `git revert`.
 
-## Security
+## What TRDL needs to provide
 
-In place: a non-root distroless image, `seccomp: RuntimeDefault`, resource limits, no secrets in the app, Trivy scanning in CI, and immutable image tags.
+**What the service guarantees:** the [HTTP contract](../README.md#service-contract); `/healthz` and `/readyz` are safe for probes and load balancer checks; `/version` reports the commit SHA; published images are immutable.
 
-Before production: image signing and provenance, dependency update automation, network policies, least-privilege IAM, an admission policy, and a documented patch process.
+**To run the proof of concept:**
 
-## Limitations and next steps
+| TRDL provides | Used in |
+|---|---|
+| A GitHub repository with Actions, and Docker Hub secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | `.github/workflows/ci.yml` |
+| A Google Cloud project with billing, and a regional GKE cluster with Workload Identity | [Deploying to GKE](operations.md#deploying-to-gke) |
+| A global static IP `trdl-ip`, and a domain pointing at it (the proof of concept uses sslip.io) | `ingress-patch.yaml`, `managedcertificate.yaml` |
+| The project ID, and KEDA with `roles/monitoring.viewer` (only if autoscaling is kept) | `scaledobject.yaml` |
+| The image tag to run | `newTag` in `overlays/gke/kustomization.yaml` |
 
-1. k3d has one control-plane server and no real zones. It demonstrates scheduling and recovery, not regional high availability.
-2. The GKE overlay has never been applied. Its hostname, static IP and project ID are placeholders, and the Cloud Monitoring filter is unverified.
-3. The 100 req/s per replica threshold is a demo value, not measured. Resource requests and limits are also starting values.
-4. CI renders the manifests but doesn't validate them against KEDA or GKE schemas.
+**To build before production:** Flux for deployment; monitoring and alerting on 5xx rate, latency and available replicas; network policies, least-privilege IAM and image signing; a patch process for Go and base-image fixes; Artifact Registry instead of Docker Hub (rate limits).
 
-Next steps: provision a regional GKE cluster, set up CI identity, deploy the `gke` overlay, run failure and load tests there, and agree SLOs before committing to an availability target.
+**To decide:** the availability target, expected traffic (and with it whether autoscaling is worth keeping), who operates the service, and whether every merge or only a release deploys.
+
+## Limitations
+
+1. k3d has one control plane and no zones; zone spread is shown on GKE only.
+2. GKE is deployed by hand, and uses an sslip.io name instead of a real domain.
+3. Autoscaling hasn't been load-tested on GKE; thresholds and resource requests are starting values, not measurements.
+4. Not yet tested: request continuity during a rolling update, and a zone failure.

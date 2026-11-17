@@ -6,4 +6,4 @@ metadata:
 spec:
   # Must match the Ingress host, with DNS pointing at the static IP.
   domains:
-    - trdl.example.com
+    - 136-82-211-146.sslip.io

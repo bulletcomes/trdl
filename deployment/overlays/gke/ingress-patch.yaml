@@ -13,7 +13,7 @@
 - op: replace
   path: /spec/rules
   value:
-    - host: trdl.example.com
+    - host: 136-82-211-146.sslip.io
       http:
         paths:
           - path: /

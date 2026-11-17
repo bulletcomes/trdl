@@ -4,26 +4,26 @@
 
 - The service must respond with `42` on `GET /`.
 - Show how this would run as a highly available production service in a public cloud.
-- Constraints: at most 10 hours, no cloud account assumed, deliverables reviewed from the repository.
+- Constraints: at most 10 hours, deliverables reviewed from the repository.
+- Simplicity first: the core (service, container, Kubernetes manifests, CI) is deliberately minimal. KEDA autoscaling (task 5b) is an extra a service that returns `42` doesn't need; I had time left and wanted to try an approach from a previous job. It is isolated, so it can be dropped without touching the core.
 
 ## 2. Requirements
 
-<!-- Number every requirement from the directions so the tasks in section 5 can point to them. Quote the directions where you can. -->
-
-| ID | Requirement (from the directions) | How I will show it's met |
+| ID | From the directions | How I will show it's met |
 |---|---|---|
-| R1 | HTTP service responding `42` | Go service + unit tests |
-| R2 | Runs in a container | Multi-stage Dockerfile |
-| R3 | Deployable to Kubernetes / locally | k3d + `overlays/local` |
-| R4 | Highly available in a public cloud | `overlays/gke`: 3 zones, PDB, KEDA autoscaling; documented, not deployed |
-| R5 | CI/CD | GitHub Actions: test, validate, build, scan, publish |
-| R6 | Documentation / developer experience | README, solution.md, operations.md |
-| R7 | Discovery + time estimate | This document |
+| R1 | The service contract: `GET /` returns `42` | Go service; the HTTP contract in the README |
+| R2 | "Start by making a discovery … and then the time you think this will take for each task" | This document |
+| R3 | "Provide reasoning and justifications why you have planned the system the way you have" | [solution.md](solution.md#design-choices): design choices with reasons |
+| R4 | "It should run on public cloud infrastructure … in a container orchestrator" | Kubernetes on GKE Autopilot, three zones, HTTPS load balancer; k3d for local development |
+| R5 | "Ensure that the developer understands what are the additional requirements that TRDL needs to implement to deploy and run the PoC" | [What TRDL needs to provide](solution.md#what-trdl-needs-to-provide) |
+| R6 | "When in doubt, err on the side of simplicity and doing less work" | A minimal core; KEDA kept optional and isolated (section 1) |
+| R7 | "Put some thought into error and edge cases in the implementation" | 404, 405 with `Allow`, timeouts, graceful shutdown; [errors and edge cases](solution.md#errors-and-edge-cases) |
+| R8 | "How automated testing of some kind should be done, either unit testing … or end-to-end testing" | Unit tests and an end-to-end smoke test, both run in CI |
 
 ## 3. Assumptions
 
-- No cloud account available, so the cloud deployment is designed and validated by rendering it, not by running it.
-- The availability target isn't specified, so I don't commit to an SLA; see operations.md.
+- A GKE Autopilot cluster in my own Google Cloud project is acceptable for the proof of concept, deployed by hand and torn down afterwards.
+- The availability target isn't specified, so I don't commit to an SLA; see solution.md.
 - A public registry (Docker Hub) is acceptable for the proof of concept.
 - The reviewer has Docker, kubectl and k3d to run it locally.
 - Traffic volume is unknown, so resource requests and autoscaling thresholds are starting values.
@@ -34,7 +34,7 @@
 |---|---|---|---|
 | Which cloud provider? | Decides the overlay, load balancer and IAM | No | GKE |
 | What availability target, or SLA? | Decides the number of zones/regions and the replica count | No | Multi-zone, one region |
-| Is a real cloud deployment expected? | Decides the scope and the cost | No | No |
+| Is a real cloud deployment expected? | Decides the scope and the cost | No | Yes: GKE Autopilot |
 | Expected traffic and latency? | Sizing, autoscaling | No | Low |
 | Any security or compliance requirements? | Scanning, signing, network policy | No | Baseline only |
 
@@ -42,68 +42,30 @@
 
 | # | Task | Covers | Estimate | Notes |
 |---|---|---|---:|---|
-| 1 | Read the directions, write this discovery | R7 | 0.75 h | |
-| 2 | Go service + unit tests (`/`, probes, 404/405) | R1 | 0.5 h | |
-| 3 | Dockerfile, non-root, distroless | R2 | 0.5 h | |
-| 4 | Base manifests + `local` overlay, k3d setup, Ingress | R3 | 1.0 h | Includes the 404 host-rule troubleshooting |
-| 5 | `gke` reference overlay (zone spread, PDB, LB, TLS) | R4 | 1.0 h | |
-| 5b | KEDA autoscaling: local demo (Prometheus, ScaledObject, k6) + GKE ScaledObject | R4 | 1.25 h | Optional; cut first if time runs short |
-| 6 | CI: tests, manifest render, build, Trivy, publish | R5 | 1.25 h | Includes the Go stdlib CVE fix and the Docker Hub switch |
-| 7 | Short-SHA image tags + `/version` endpoint | R5 | 0.25 h | Shows which build is running |
-| 8 | Failure and rollout checks (pod kill, rolling update, smoke test) | R4 | 1.0 h | The k6 Job from 5b can be reused for the rolling-update check |
-| 9 | Docs: README, solution, operations | R6 | 1.0 h | |
+| 1 | Read the directions, write this discovery | R2 | 0.75 h | |
+| 2 | Go service + unit tests (`/`, probes, 404/405, edge cases) | R1, R7, R8 | 0.5 h | |
+| 3 | Dockerfile, non-root, distroless | R4 | 0.5 h | |
+| 4 | Base manifests + `local` overlay, k3d setup, Ingress | R4 | 1.0 h | Includes the 404 host-rule troubleshooting |
+| 5 | `gke` overlay (zone spread, PDB, LB, TLS) and deploy to GKE Autopilot | R4 | 1.0 h | Deploying found two errors in the KEDA trigger |
+| 5b | KEDA autoscaling: local demo (Prometheus, ScaledObject, k6) + GKE ScaledObject | R4, R6 | 1.25 h | Optional extra, done with spare time; cut first if time runs short |
+| 6 | CI: tests, end-to-end smoke test, manifest render, build, Trivy, publish | R8, R4 | 1.25 h | Includes the Go stdlib CVE fix and the Docker Hub switch |
+| 7 | Short-SHA image tags + `/version` endpoint | R4 | 0.25 h | Shows which build is running |
+| 8 | Failure and rollout checks (pod kill, rolling update, smoke test) | R8 | 1.0 h | Done: pod kill on k3d, smoke checks on GKE. Not done: rolling update under load |
+| 9 | Docs: README, solution, operations | R3, R5 | 1.0 h | |
 | | **Total** | | **8.5 h** | |
 | | Contingency | | 1.5 h | |
 
 ## 6. Out of scope
 
-- A real GKE deployment: no cloud account, and it costs money.
-- CI deploying to a cluster: a hosted runner can't reach k3d; the design is described in solution.md.
-- DNS, real TLS, IAM / Workload Identity Federation.
-- Release-based publishing. The proof of concept publishes a short-SHA image on every push to `main`. The intended flow is that pull requests build and push short-SHA images for testing a change before merge, and creating a GitHub release publishes the release-tagged image that gets deployed:
-
-  ```yaml
-  on:
-    pull_request:
-    release:
-      types: [published]
-
-  jobs:
-    publish:
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v4
-
-        - name: Choose image tag
-          id: tag
-          run: |
-            if [ "${{ github.event_name }}" = "release" ]; then
-              echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"   # v1.2.0 -> 1.2.0
-            else
-              sha="${{ github.event.pull_request.head.sha }}"
-              echo "tag=${sha::7}" >> "$GITHUB_OUTPUT"              # PR head commit
-            fi
-
-        - uses: docker/login-action@v3
-          with:
-            username: ${{ secrets.DOCKERHUB_USERNAME }}
-            password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-        - uses: docker/build-push-action@v6
-          with:
-            context: app
-            build-args: VERSION=${{ steps.tag.outputs.tag }}
-            push: true
-            tags: docker.io/bulletcomes/trdl:${{ steps.tag.outputs.tag }}
-  ```
-
-  Pull requests from forks don't receive repository secrets, so they can build but not push.
+- Automated deployment: GKE is deployed by hand. In production, Flux (GitOps) would deploy from this repository, with pull-request review as the approval (described in solution.md).
+- A real domain: the certificate is for an sslip.io name derived from the static IP.
+- Release-based publishing: the proof of concept publishes an image on every push to `main`. In production, pull requests would publish test images and a GitHub release would publish the version that gets deployed.
 
 ## 7. Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| GKE overlay never applied to a real cluster | May contain mistakes only GKE would catch | Rendered in CI; uses only documented GKE resources; listed as a limitation |
+| Cloud costs while the cluster runs | Unexpected bill | Autopilot bills per pod; delete the cluster and static IP after review (commands in operations.md) |
 | Single-server k3d isn't really HA | Local demo overstates resilience | Stated explicitly in solution.md's limitations |
 | Docker Hub pull rate limits | Image pulls fail | Move to Artifact Registry for production |
 | Running over 10 h | Assignment constraint | Track time per task; cut 5b first |

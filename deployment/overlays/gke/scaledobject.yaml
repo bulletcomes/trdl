@@ -22,20 +22,19 @@ spec:
           stabilizationWindowSeconds: 300
   triggers:
     # Primary signal: requests per second at the external load balancer, per replica.
-    - type: gcp-stackdriver
+    # Reads Cloud Monitoring through its Prometheus-compatible API (PromQL).
+    # KEDA's gcp-stackdriver scaler is deprecated in favour of this.
+    # Load balancer metrics arrive with a delay of a few minutes, so this
+    # reacts to sustained load, not short spikes.
+    - type: prometheus
       authenticationRef:
         name: gcp-workload-identity
       metadata:
-        projectId: my-gcp-project # replace
-        filter: >-
-          metric.type="loadbalancing.googleapis.com/https/request_count"
-          AND resource.labels.backend_target_name=monitoring.regex.full_match("k8s1-.*-trdl-trdl-80-.*")
-        alignmentPeriodSeconds: "60"
-        alignmentAligner: ALIGN_RATE
-        alignmentReducer: REDUCE_SUM
-        targetValue: "100"
-        valueIfNull: "0"
-    # Fallback: still scale on CPU if Cloud Monitoring is slow or unreachable.
+        serverAddress: https://monitoring.googleapis.com/v1/projects/trdl-515015/location/global/prometheus
+        query: >-
+          sum(rate(loadbalancing_googleapis_com:https_request_count{monitored_resource="https_lb_rule",backend_target_name=~"k8s1-.*-trdl-trdl-80-.*"}[2m]))
+        threshold: "100"
+    # Second signal: still scale on CPU if the request metric is slow or unavailable.
     - type: cpu
       metricType: Utilization
       metadata:

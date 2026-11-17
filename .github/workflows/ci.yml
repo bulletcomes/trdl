@@ -41,6 +41,13 @@ jobs:
       - name: Build container
         run: docker build --build-arg VERSION=${{ steps.vars.outputs.short_sha }} -t trdl:${GITHUB_SHA} app
 
+      - name: End-to-end smoke test
+        run: |
+          docker run -d --name trdl -p 8080:8080 trdl:${GITHUB_SHA}
+          timeout 30 bash -c 'until curl -sf http://localhost:8080/healthz >/dev/null; do sleep 1; done'
+          scripts/smoke-test.sh http://localhost:8080 ${{ steps.vars.outputs.short_sha }}
+          docker rm -f trdl
+
       - name: Scan container image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
