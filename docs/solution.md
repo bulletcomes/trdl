@@ -49,6 +49,7 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 
 **What the service guarantees:** the [HTTP contract](../README.md#service-contract); `/healthz` and `/readyz` are safe for probes and load balancer checks; `/version` reports the commit SHA; published images are immutable.
 
+<!-- 
 **To run the proof of concept:**
 
 | TRDL provides | Used in |
@@ -59,6 +60,7 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 | A global static IP `trdl-ip`, and a domain pointing at it (the proof of concept uses sslip.io) | `ingress-patch.yaml`, `managedcertificate.yaml` |
 | The project ID, and KEDA with `roles/monitoring.viewer` (only if autoscaling is kept) | `scaledobject.yaml` |
 | The image tag to run | `newTag` in `overlays/gke/kustomization.yaml` |
+-->
 
 **To build before production:** Flux for deployment; monitoring and alerting on 5xx rate, latency and available replicas; network policies, least-privilege IAM and image signing; a patch process for Go and base-image fixes; Artifact Registry instead of Docker Hub (rate limits).
 
