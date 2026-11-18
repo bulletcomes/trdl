@@ -1,12 +1,14 @@
 # Operations
 
-Local setup is in the [README quickstart](../README.md#quickstart-k3d). Check any deployment with `scripts/smoke-test.sh <url> [expected-tag]`.
+<!-- Local setup is in the [README quickstart](../README.md#quickstart-k3d). Check any deployment with `scripts/smoke-test.sh <url> [expected-tag]`. -->
 
-## Deploying to GKE
+## GKE
 
 Currently deployed to the Autopilot cluster `trdl-poc` in project `trdl-515015`, at `https://136-82-211-146.sslip.io/`.
 
-1. Create a regional Autopilot cluster and connect. kubectl needs `gke-gcloud-auth-plugin`.
+We have omitted installation instructions to shorten the documentation a bit.
+
+<!-- 1. Create a regional Autopilot cluster and connect. kubectl needs `gke-gcloud-auth-plugin`.
    ```bash
    gcloud container clusters create-auto trdl-poc --region europe-north1
    gcloud container clusters get-credentials trdl-poc --region europe-north1
@@ -23,10 +25,18 @@ Currently deployed to the Autopilot cluster `trdl-poc` in project `trdl-515015`,
    ```bash
    kubectl apply -k deployment/overlays/gke
    kubectl -n trdl get pods -o wide && kubectl get nodes -L topology.kubernetes.io/zone
-   ```
-6. After 15–60 minutes (load balancer and certificate), run `scripts/smoke-test.sh https://<host> <tag>`. Test with the script rather than waiting for `kubectl get managedcertificate` to say `Active`; it lags.
+   ```-->
 
-Tear down: `gcloud container clusters delete trdl-poc --region europe-north1` and `gcloud compute addresses delete trdl-ip --global`.
+Check one pod per zone:
+
+```bash
+kubectl apply -k deployment/overlays/gke
+kubectl -n trdl get pods -o wide && kubectl get nodes -L topology.kubernetes.io/zone
+```   
+
+Test with the script `scripts/smoke-test.sh https://<host>`.
+
+<!-- Tear down: `gcloud container clusters delete trdl-poc --region europe-north1` and `gcloud compute addresses delete trdl-ip --global`. -->
 
 ## Autoscaling demo (k3d, optional)
 

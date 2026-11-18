@@ -46,7 +46,7 @@
 | 2 | Go service + unit tests (`/`, probes, 404/405, edge cases) | R1, R7, R8 | 0.5 h | |
 | 3 | Dockerfile, non-root, distroless | R4 | 0.5 h | |
 | 4 | Base manifests + `local` overlay, k3d setup, Ingress | R4 | 1.0 h | Includes the 404 host-rule troubleshooting |
-| 5 | `gke` overlay (zone spread, PDB, LB, TLS) and deploy to GKE Autopilot | R4 | 1.0 h | Deploying found two errors in the KEDA trigger |
+| 5 | `gke` overlay and deploy to GKE Autopilot | R4 | 1.0 h |  |
 | 5b | KEDA autoscaling: local demo (Prometheus, ScaledObject, k6) + GKE ScaledObject | R4, R6 | 1.25 h | Optional extra, done with spare time; cut first if time runs short |
 | 6 | CI: tests, end-to-end smoke test, manifest render, build, Trivy, publish | R8, R4 | 1.25 h | Includes the Go stdlib CVE fix and the Docker Hub switch |
 | 7 | Short-SHA image tags + `/version` endpoint | R4 | 0.25 h | Shows which build is running |
@@ -72,7 +72,5 @@
 
 ## 8. Retrospective (after the work)
 
-<!-- Short: where the estimate was right or wrong, and why. Reviewers value this. -->
-
-- [Biggest difference between estimate and actual, and why.]
-- [What I would estimate differently next time.]
+- Biggest difference between estimation and actual time was writing and revising the documentation, and finding edge-cases.
+- If I had to do it over again, I would have spent more time on R1 and R3.

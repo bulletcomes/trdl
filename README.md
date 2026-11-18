@@ -7,7 +7,7 @@ Running on GKE Autopilot in `europe-north1`, across three zones: `curl https://1
 | Document | Contents |
 |---|---|
 | [docs/discovery.md](docs/discovery.md) | Requirements, assumptions, tasks and time estimate |
-| [docs/solution.md](docs/solution.md) | Architecture, design choices, availability, autoscaling, security, [what TRDL needs to provide](docs/solution.md#what-trdl-needs-to-provide), limitations |
+| [docs/solution.md](docs/solution.md) | Design choices and reasons, errors and edge cases, testing, delivery, [what TRDL needs to provide](docs/solution.md#what-trdl-needs-to-provide), limitations |
 | [docs/operations.md](docs/operations.md) | Runbook: KEDA demo, GKE deployment, troubleshooting, rollouts |
 
 ## Service contract

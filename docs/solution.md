@@ -2,24 +2,6 @@
 
 `GET /` returns `42`. The service is trivial on purpose; the work is in running it as a highly available service on public cloud. It runs on GKE Autopilot in `europe-north1`, across three zones, at `https://136-82-211-146.sslip.io/`, and on k3d for local development. Tasks and estimates are in [discovery.md](discovery.md).
 
-## Architecture
-
-```mermaid
-flowchart TB
-    C[Client] --> LB[Global HTTPS load balancer<br/>managed certificate]
-    LB -- NEGs --> Z1 & Z2 & Z3
-    subgraph Z1[Zone a]
-        P1[trdl pod]
-    end
-    subgraph Z2[Zone b]
-        P2[trdl pod]
-    end
-    subgraph Z3[Zone c]
-        P3[trdl pod]
-    end
-    KEDA[KEDA] -. scales on request rate .-> Z1 & Z2 & Z3
-```
-
 ## Design choices
 
 Guiding rule: the simplest setup that is still credibly highly available.
@@ -80,7 +62,6 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 
 **To build before production:** Flux for deployment; monitoring and alerting on 5xx rate, latency and available replicas; network policies, least-privilege IAM and image signing; a patch process for Go and base-image fixes; Artifact Registry instead of Docker Hub (rate limits).
 
-**To decide:** the availability target, expected traffic (and with it whether autoscaling is worth keeping), who operates the service, and whether every merge or only a release deploys.
 
 ## Limitations
 
@@ -88,4 +69,3 @@ CI publishes an immutable short-SHA image on `main`; `/version` reports it. In t
 2. GKE is deployed by hand, and uses an sslip.io name instead of a real domain.
 3. Autoscaling hasn't been load-tested on GKE; thresholds and resource requests are starting values, not measurements.
 4. Not yet tested: request continuity during a rolling update, and a zone failure.
-5. Kubernetes doesn't rebalance running pods. If a zone has no schedulable node during a rollout, two pods can end up in one zone until one is deleted (seen once on GKE; see [operations.md](operations.md#rollouts-and-troubleshooting)).
